@@ -27,7 +27,7 @@ import numpy as np
 
 ### <summary>
 ### Algorithm demonstrating FOREX asset types and requesting history on them in bulk. As FOREX uses
-### QuoteBars you should request slices or
+### QuoteBars you should request slices
 ### </summary>
 ### <meta name="tag" content="using data" />
 ### <meta name="tag" content="history and warm up" />
@@ -40,7 +40,7 @@ class BasicTemplateForexAlgorithm(QCAlgorithm):
         self.SetCash(100000)
 
         # Start and end dates for the backtest.
-        self.SetStartDate(2013, 10, 07)
+        self.SetStartDate(2013, 10, 7)
         self.SetEndDate(2013, 10, 11)
 
         # Add FOREX contract you want to trade

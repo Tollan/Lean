@@ -438,6 +438,27 @@ namespace QuantConnect.Tests.Common
             Assert.AreEqual(new DateTime(2016, 02, 05)/*Friday*/, OptionSymbol.GetLastDayOfTrading(weeklySymbol));
         }
 
+        [Test]
+        public void HasUnderlyingSymbolReturnsTrueWhenSpecifyingCorrectUnderlying()
+        {
+            Assert.IsTrue(Symbols.SPY_C_192_Feb19_2016.HasUnderlyingSymbol(Symbols.SPY));
+        }
+
+        [Test]
+        public void HasUnderlyingSymbolReturnsFalsWhenSpecifyingIncorrectUnderlying()
+        {
+            Assert.IsFalse(Symbols.SPY_C_192_Feb19_2016.HasUnderlyingSymbol(Symbols.AAPL));
+        }
+
+        [Test]
+        public void TestIfFridayLastTradingDayIsHolidaysThenMoveToPreviousThursday()
+        {
+            var saturdayAfterGoodFriday = new DateTime(2014, 04, 19);
+            var thursdayBeforeGoodFriday = saturdayAfterGoodFriday.AddDays(-2);
+            var symbol = Symbol.CreateOption("SPY", Market.USA, OptionStyle.American, OptionRight.Call, 200, saturdayAfterGoodFriday);
+            Assert.AreEqual(thursdayBeforeGoodFriday, OptionSymbol.GetLastDayOfTrading(symbol));
+        }
+
         class OldSymbol
         {
             public string Value { get; set; }

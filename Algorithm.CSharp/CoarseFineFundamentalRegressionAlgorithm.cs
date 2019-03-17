@@ -1,4 +1,4 @@
-﻿/*
+/*
  * QUANTCONNECT.COM - Democratizing Finance, Empowering Individuals.
  * Lean Algorithmic Trading Engine v2.0. Copyright 2014 QuantConnect Corporation.
  *
@@ -16,9 +16,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using QuantConnect.Data;
 using QuantConnect.Data.Fundamental;
 using QuantConnect.Data.Market;
 using QuantConnect.Data.UniverseSelection;
+using QuantConnect.Interfaces;
 
 namespace QuantConnect.Algorithm.CSharp
 {
@@ -30,7 +32,7 @@ namespace QuantConnect.Algorithm.CSharp
     /// <meta name="tag" content="universes" />
     /// <meta name="tag" content="coarse universes" />
     /// <meta name="tag" content="regression test" />
-    public class CoarseFineFundamentalRegressionAlgorithm : QCAlgorithm
+    public class CoarseFineFundamentalRegressionAlgorithm : QCAlgorithm, IRegressionAlgorithmDefinition
     {
         private const int NumberOfSymbolsFine = 2;
 
@@ -41,8 +43,8 @@ namespace QuantConnect.Algorithm.CSharp
         {
             UniverseSettings.Resolution = Resolution.Daily;
 
-            SetStartDate(2014, 04, 01);
-            SetEndDate(2014, 04, 30);
+            SetStartDate(2014, 03, 24);
+            SetEndDate(2014, 04, 07);
             SetCash(50000);
 
             // this add universe method accepts two parameters:
@@ -54,21 +56,21 @@ namespace QuantConnect.Algorithm.CSharp
         // return a list of three fixed symbol objects
         public IEnumerable<Symbol> CoarseSelectionFunction(IEnumerable<CoarseFundamental> coarse)
         {
-            if (Time.Date < new DateTime(2014, 4, 5))
+            if (Time.Date < new DateTime(2014, 4, 1))
             {
                 return new List<Symbol>
                 {
-                    QuantConnect.Symbol.Create("AAPL", SecurityType.Equity, "usa"),
-                    QuantConnect.Symbol.Create("AIG", SecurityType.Equity, "usa"),
-                    QuantConnect.Symbol.Create("IBM", SecurityType.Equity, "usa")
+                    QuantConnect.Symbol.Create("AAPL", SecurityType.Equity, Market.USA),
+                    QuantConnect.Symbol.Create("AIG", SecurityType.Equity, Market.USA),
+                    QuantConnect.Symbol.Create("IBM", SecurityType.Equity, Market.USA)
                 };
             }
 
             return new List<Symbol>
             {
-                QuantConnect.Symbol.Create("BAC", SecurityType.Equity, "usa"),
-                QuantConnect.Symbol.Create("GOOG", SecurityType.Equity, "usa"),
-                QuantConnect.Symbol.Create("SPY", SecurityType.Equity, "usa")
+                QuantConnect.Symbol.Create("BAC", SecurityType.Equity, Market.USA),
+                QuantConnect.Symbol.Create("GOOG", SecurityType.Equity, Market.USA),
+                QuantConnect.Symbol.Create("SPY", SecurityType.Equity, Market.USA)
             };
         }
 
@@ -104,11 +106,29 @@ namespace QuantConnect.Algorithm.CSharp
             // we want 50% allocation in each security in our universe
             foreach (var security in _changes.AddedSecurities)
             {
-                SetHoldings(security.Symbol, 0.5m);
-                Debug("Purchased Stock: " + security.Symbol.Value);
+                if (security.Fundamentals.EarningRatios.EquityPerShareGrowth.OneYear > 0.25m)
+                {
+                    SetHoldings(security.Symbol, 0.5m);
+                    Debug("Purchased Stock: " + security.Symbol.Value);
+                }
             }
 
             _changes = SecurityChanges.None;
+        }
+
+        public override void OnData(Slice data)
+        {
+            // verify we don't receive data for inactive securities
+            var inactiveSymbols = data.Keys
+                .Where(sym => !UniverseManager.ActiveSecurities.ContainsKey(sym))
+                // on daily data we'll get the last data point and the delisting at the same time
+                .Where(sym => !data.Delistings.ContainsKey(sym) || data.Delistings[sym].Type != DelistingType.Delisted)
+                .ToList();
+            if (inactiveSymbols.Any())
+            {
+                var symbols = string.Join(", ", inactiveSymbols);
+                throw new Exception($"Received data for non-active security: {symbols}.");
+            }
         }
 
         // this event fires whenever we have changes to our universe
@@ -125,5 +145,41 @@ namespace QuantConnect.Algorithm.CSharp
                 Debug("Securities removed: " + string.Join(",", changes.RemovedSecurities.Select(x => x.Symbol.Value)));
             }
         }
+
+        /// <summary>
+        /// This is used by the regression test system to indicate if the open source Lean repository has the required data to run this algorithm.
+        /// </summary>
+        public bool CanRunLocally { get; } = true;
+
+        /// <summary>
+        /// This is used by the regression test system to indicate which languages this algorithm is written in.
+        /// </summary>
+        public Language[] Languages { get; } = { Language.CSharp, Language.Python };
+
+        /// <summary>
+        /// This is used by the regression test system to indicate what the expected statistics are from running the algorithm
+        /// </summary>
+        public Dictionary<string, string> ExpectedStatistics => new Dictionary<string, string>
+        {
+            {"Total Trades", "2"},
+            {"Average Win", "0%"},
+            {"Average Loss", "-0.19%"},
+            {"Compounding Annual Return", "-4.314%"},
+            {"Drawdown", "1.300%"},
+            {"Expectancy", "-1"},
+            {"Net Profit", "-0.193%"},
+            {"Sharpe Ratio", "-0.625"},
+            {"Loss Rate", "100%"},
+            {"Win Rate", "0%"},
+            {"Profit-Loss Ratio", "0"},
+            {"Alpha", "-0.515"},
+            {"Beta", "30.545"},
+            {"Annual Standard Deviation", "0.053"},
+            {"Annual Variance", "0.003"},
+            {"Information Ratio", "-0.922"},
+            {"Tracking Error", "0.053"},
+            {"Treynor Ratio", "-0.001"},
+            {"Total Fees", "$2.00"}
+        };
     }
 }

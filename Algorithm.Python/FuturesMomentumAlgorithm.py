@@ -21,7 +21,6 @@ from QuantConnect import *
 from QuantConnect.Algorithm import *
 from QuantConnect.Securities import *
 from datetime import timedelta
-import decimal as d
 import numpy as np
 
 ### <summary>
@@ -43,7 +42,9 @@ class FuturesMomentumAlgorithm(QCAlgorithm):
         self.SetCash(100000)
         fastPeriod = 20
         slowPeriod = 60
-        self._tolerance = 0.001
+        self._tolerance = 1 + 0.001
+        self.IsUpTrend = False
+        self.IsDownTrend = False
         self.SetWarmUp(max(fastPeriod, slowPeriod))
 
         # Adds SPY to be used in our EMA indicators
@@ -55,14 +56,15 @@ class FuturesMomentumAlgorithm(QCAlgorithm):
         future = self.AddFuture(Futures.Indices.SP500EMini)
         future.SetFilter(timedelta(0), timedelta(182))
 
+
     def OnData(self, slice):
         if self._slow.IsReady and self._fast.IsReady:
-            self.IsUpTrend = self._fast.Current.Value > self._slow.Current.Value * d.Decimal(1 + self._tolerance)
-            self.IsDownTrend = self._fast.Current.Value < self._slow.Current.Value * d.Decimal(1 + self._tolerance)
+            self.IsUpTrend = self._fast.Current.Value > self._slow.Current.Value * self._tolerance
+            self.IsDownTrend = self._fast.Current.Value < self._slow.Current.Value * self._tolerance
             if (not self.Portfolio.Invested) and self.IsUpTrend:
                 for chain in slice.FuturesChains:
                     # find the front contract expiring no earlier than in 90 days
-                    contracts = filter(lambda x: x.Expiry > self.Time + timedelta(90), chain.Value)
+                    contracts = list(filter(lambda x: x.Expiry > self.Time + timedelta(90), chain.Value))
                     # if there is any contract, trade the front contract
                     if len(contracts) == 0: continue
                     contract = sorted(contracts, key = lambda x: x.Expiry, reverse=True)[0]
@@ -76,7 +78,7 @@ class FuturesMomentumAlgorithm(QCAlgorithm):
             self.Plot("Indicator Signal", "EOD",1)
         elif self.IsDownTrend:
             self.Plot("Indicator Signal", "EOD",-1)
-        else:
+        elif self._slow.IsReady and self._fast.IsReady:
             self.Plot("Indicator Signal", "EOD",0)
 
 

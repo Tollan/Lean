@@ -22,7 +22,6 @@ from QuantConnect import *
 from QuantConnect.Algorithm import *
 from QuantConnect.Indicators import *
 from QuantConnect.Parameters import *
-import decimal as d
 
 ### <summary>
 ### Demonstration of the parameter system of QuantConnect. Using parameters you can pass the values required into C# algorithms for optimization.
@@ -34,9 +33,9 @@ class ParameterizedAlgorithm(QCAlgorithm):
     def Initialize(self):
         '''Initialise the data and resolution required, as well as the cash and start-end dates for your algorithm. All algorithms must initialized.'''
 
-        self.SetStartDate(2013, 10, 07)  #Set Start Date
+        self.SetStartDate(2013, 10, 7)   #Set Start Date
         self.SetEndDate(2013, 10, 11)    #Set End Date
-        self.SetCash(100000)           #Set Strategy Cash
+        self.SetCash(100000)             #Set Strategy Cash
         # Find more symbols here: http://quantconnect.com/data
         self.AddEquity("SPY")
 
@@ -62,7 +61,7 @@ class ParameterizedAlgorithm(QCAlgorithm):
         fast = self.fast.Current.Value
         slow = self.slow.Current.Value
 
-        if fast > slow * d.Decimal(1.001):
+        if fast > slow * 1.001:
             self.SetHoldings("SPY", 1)
-        elif fast < slow * d.Decimal(0.999):
+        elif fast < slow * 0.999:
             self.Liquidate("SPY")

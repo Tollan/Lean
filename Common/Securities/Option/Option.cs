@@ -20,6 +20,8 @@ using QuantConnect.Orders.Fills;
 using QuantConnect.Orders.Slippage;
 using QuantConnect.Orders.OptionExercise;
 using Python.Runtime;
+using QuantConnect.Data.Market;
+using QuantConnect.Interfaces;
 using QuantConnect.Util;
 
 namespace QuantConnect.Securities.Option
@@ -28,7 +30,7 @@ namespace QuantConnect.Securities.Option
     /// Option Security Object Implementation for Option Assets
     /// </summary>
     /// <seealso cref="Security"/>
-    public class Option : Security
+    public class Option : Security, IDerivativeSecurity, IOptionPrice
     {
         /// <summary>
         /// The default number of days required to settle an equity sale
@@ -47,7 +49,9 @@ namespace QuantConnect.Securities.Option
         /// <param name="quoteCurrency">The cash object that represent the quote currency</param>
         /// <param name="config">The subscription configuration for this security</param>
         /// <param name="symbolProperties">The symbol properties for this security</param>
-        public Option(SecurityExchangeHours exchangeHours, SubscriptionDataConfig config, Cash quoteCurrency, OptionSymbolProperties symbolProperties)
+        /// <param name="currencyConverter">Currency converter used to convert <see cref="CashAmount"/>
+        /// instances into units of the account currency</param>
+        public Option(SecurityExchangeHours exchangeHours, SubscriptionDataConfig config, Cash quoteCurrency, OptionSymbolProperties symbolProperties, ICurrencyConverter currencyConverter)
             : base(config,
                 quoteCurrency,
                 symbolProperties,
@@ -61,14 +65,15 @@ namespace QuantConnect.Securities.Option
                 Securities.VolatilityModel.Null,
                 new OptionMarginModel(),
                 new OptionDataFilter(),
-                new SecurityPriceVariationModel()
+                new SecurityPriceVariationModel(),
+                currencyConverter
                 )
         {
             ExerciseSettlement = SettlementType.PhysicalDelivery;
             SetDataNormalizationMode(DataNormalizationMode.Raw);
             OptionExerciseModel = new DefaultExerciseModel();
             PriceModel = new CurrentPriceOptionPriceModel();
-            Holdings = new OptionHolding(this);
+            Holdings = new OptionHolding(this, currencyConverter);
             _symbolProperties = symbolProperties;
             SetFilter(-1, 1, TimeSpan.Zero, TimeSpan.FromDays(35));
         }
@@ -80,7 +85,9 @@ namespace QuantConnect.Securities.Option
         /// <param name="exchangeHours">Defines the hours this exchange is open</param>
         /// <param name="quoteCurrency">The cash object that represent the quote currency</param>
         /// <param name="symbolProperties">The symbol properties for this security</param>
-        public Option(Symbol symbol, SecurityExchangeHours exchangeHours, Cash quoteCurrency, OptionSymbolProperties symbolProperties)
+        /// <param name="currencyConverter">Currency converter used to convert <see cref="CashAmount"/>
+        /// instances into units of the account currency</param>
+        public Option(Symbol symbol, SecurityExchangeHours exchangeHours, Cash quoteCurrency, OptionSymbolProperties symbolProperties, ICurrencyConverter currencyConverter)
            : base(symbol,
                quoteCurrency,
                symbolProperties,
@@ -94,21 +101,31 @@ namespace QuantConnect.Securities.Option
                Securities.VolatilityModel.Null,
                new OptionMarginModel(),
                new OptionDataFilter(),
-               new SecurityPriceVariationModel()
+               new SecurityPriceVariationModel(),
+               currencyConverter
                )
         {
             ExerciseSettlement = SettlementType.PhysicalDelivery;
             SetDataNormalizationMode(DataNormalizationMode.Raw);
             OptionExerciseModel = new DefaultExerciseModel();
             PriceModel = new CurrentPriceOptionPriceModel();
-            Holdings = new OptionHolding(this);
+            Holdings = new OptionHolding(this, currencyConverter);
             _symbolProperties = symbolProperties;
             SetFilter(-1, 1, TimeSpan.Zero, TimeSpan.FromDays(35));
         }
 
-
         // save off a strongly typed version of symbol properties
         private readonly OptionSymbolProperties _symbolProperties;
+
+        /// <summary>
+        /// Returns true if this is the option chain security, false if it is a specific option contract
+        /// </summary>
+        public bool IsOptionChain => Symbol.IsCanonical();
+
+        /// <summary>
+        /// Returns true if this is a specific option contract security, false if it is the option chain security
+        /// </summary>
+        public bool IsOptionContract => !Symbol.IsCanonical();
 
         /// <summary>
         /// Gets the strike price
@@ -234,6 +251,25 @@ namespace QuantConnect.Securities.Option
         }
 
         /// <summary>
+        /// Gets a reduced interface of the underlying security object.
+        /// </summary>
+        ISecurityPrice IOptionPrice.Underlying => Underlying;
+
+        /// <summary>
+        /// For this option security object, evaluates the specified option
+        /// contract to compute a theoretical price, IV and greeks
+        /// </summary>
+        /// <param name="slice">The current data slice. This can be used to access other information
+        /// available to the algorithm</param>
+        /// <param name="contract">The option contract to evaluate</param>
+        /// <returns>An instance of <see cref="OptionPriceModelResult"/> containing the theoretical
+        /// price of the specified option contract</returns>
+        public OptionPriceModelResult EvaluatePriceModel(Slice slice, OptionContract contract)
+        {
+            return PriceModel.Evaluate(this, slice, contract);
+        }
+
+        /// <summary>
         /// Gets or sets the price model for this option security
         /// </summary>
         public IOptionPriceModel PriceModel
@@ -303,6 +339,19 @@ namespace QuantConnect.Securities.Option
         /// Sets the <see cref="ContractFilter"/> to a new instance of the filter
         /// using the specified min and max strike and expiration range values
         /// </summary>
+        /// <param name="minExpiry">The minimum time until expiry to include, for example, TimeSpan.FromDays(10)
+        /// would exclude contracts expiring in less than 10 days</param>
+        /// <param name="maxExpiry">The maxmium time until expiry to include, for example, TimeSpan.FromDays(10)
+        /// would exclude contracts expiring in more than 10 days</param>
+        public void SetFilter(TimeSpan minExpiry, TimeSpan maxExpiry)
+        {
+            SetFilter(universe => universe.Expiration(minExpiry, maxExpiry));
+        }
+
+        /// <summary>
+        /// Sets the <see cref="ContractFilter"/> to a new instance of the filter
+        /// using the specified min and max strike and expiration range values
+        /// </summary>
         /// <param name="minStrike">The min strike rank relative to market price, for example, -1 would put
         /// a lower bound of one strike under market price, where a +1 would put a lower bound of one strike
         /// over market price</param>
@@ -316,8 +365,8 @@ namespace QuantConnect.Securities.Option
         public void SetFilter(int minStrike, int maxStrike, TimeSpan minExpiry, TimeSpan maxExpiry)
         {
             SetFilter(universe => universe
-                                .Strikes(minStrike, maxStrike)
-                                .Expiration(minExpiry, maxExpiry));
+                .Strikes(minStrike, maxStrike)
+                .Expiration(minExpiry, maxExpiry));
         }
 
         /// <summary>

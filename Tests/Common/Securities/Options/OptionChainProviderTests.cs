@@ -24,7 +24,8 @@ using QuantConnect.Lean.Engine.DataFeeds;
 
 namespace QuantConnect.Tests.Common.Securities.Options
 {
-    [TestFixture]
+    // For now these tests are excluded from the Travis build because of occasional web server errors.
+    [TestFixture, Category("TravisExclude")]
     public class OptionChainProviderTests
     {
         [Test]
@@ -52,6 +53,15 @@ namespace QuantConnect.Tests.Common.Securities.Options
 
             Assert.GreaterOrEqual(stopwatch.ElapsedMilliseconds, 1000);
             Assert.AreEqual(2, symbols.Count());
+        }
+
+        [Test]
+        public void LiveOptionChainProviderReturnsData()
+        {
+            var provider = new LiveOptionChainProvider();
+            var result = provider.GetOptionContractList(Symbols.AAPL, DateTime.Today);
+
+            Assert.IsTrue(result.Any());
         }
     }
 

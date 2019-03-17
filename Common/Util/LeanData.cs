@@ -14,6 +14,7 @@
 */
 
 using System;
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -508,32 +509,6 @@ namespace QuantConnect.Util
         }
 
         /// <summary>
-        /// Creates the entry name for a QC zip data file
-        /// </summary>
-        public static string GenerateZipEntryName(string symbol, SecurityType securityType, DateTime date, Resolution resolution, TickType dataType = TickType.Trade)
-        {
-            if (securityType != SecurityType.Base && securityType != SecurityType.Equity && securityType != SecurityType.Forex && securityType != SecurityType.Cfd && securityType != SecurityType.Crypto)
-            {
-                throw new NotImplementedException("This method only implements base, equity, forex, crypto and cfd security type.");
-            }
-
-            symbol = symbol.ToLower();
-
-            if (resolution == Resolution.Hour || resolution == Resolution.Daily)
-            {
-                return symbol + ".csv";
-            }
-
-            //All fx is quote data.
-            if (securityType == SecurityType.Forex || securityType == SecurityType.Cfd)
-            {
-                dataType = TickType.Quote;
-            }
-
-            return string.Format("{0}_{1}_{2}_{3}.csv", date.ToString(DateFormat.EightCharacter), symbol, resolution.ToLower(), dataType.ToLower());
-        }
-
-        /// <summary>
         /// Generates the zip file name for the specified date of data.
         /// </summary>
         public static string GenerateZipFileName(Symbol symbol, DateTime date, Resolution resolution, TickType tickType)
@@ -816,15 +791,15 @@ namespace QuantConnect.Util
                 resolution = (Resolution)Enum.Parse(typeof(Resolution), info[startIndex + 2], true);
                 var securityType = (SecurityType)Enum.Parse(typeof(SecurityType), info[startIndex], true);
 
-                if (securityType == SecurityType.Option || securityType == SecurityType.Future)
-                {
-                    throw new ArgumentException("LeanData.TryParsePath(): Options and futures are not supported by this method.");
-                }
-
                 // If resolution is Daily or Hour, we do not need to set the date and tick type
                 if (resolution < Resolution.Hour)
                 {
                     date = DateTime.ParseExact(info[startIndex + 4].Substring(0, 8), DateFormat.EightCharacter, null);
+                }
+
+                if (securityType == SecurityType.Crypto)
+                {
+                    ticker = ticker.Split('_').First();
                 }
 
                 symbol = Symbol.Create(ticker, securityType, market);

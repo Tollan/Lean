@@ -17,7 +17,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using Newtonsoft.Json;
 using NUnit.Framework;
 using QuantConnect.Data;
 using QuantConnect.Data.Fundamental;
@@ -39,7 +41,13 @@ namespace QuantConnect.Tests.Engine.DataFeeds.Enumerators.Factories
             var rows = new List<FineFundamental>();
 
             var config = new SubscriptionDataConfig(typeof(FineFundamental), parameters.Symbol, Resolution.Daily, TimeZones.NewYork, TimeZones.NewYork, false, false, false, false, TickType.Trade, false);
-            var security = new Security(SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork), config, new Cash(CashBook.AccountCurrency, 0, 1), SymbolProperties.GetDefault(CashBook.AccountCurrency));
+            var security = new Security(
+                SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork),
+                config,
+                new Cash(Currencies.USD, 0, 1),
+                SymbolProperties.GetDefault(Currencies.USD),
+                ErrorCurrencyConverter.Instance
+            );
             var request = new SubscriptionRequest(false, null, security, config, parameters.StartDate, parameters.EndDate);
             var fileProvider = new DefaultDataProvider();
 
@@ -74,6 +82,16 @@ namespace QuantConnect.Tests.Engine.DataFeeds.Enumerators.Factories
             Assert.AreEqual(parameters.PeRatio, row.ValuationRatios.PERatio);
         }
 
+        [Test]
+        public void DeserializesUpdatedFileFormat()
+        {
+            var json = File.ReadAllText("./TestData/aapl_fine_fundamental.json");
+            Assert.DoesNotThrow(() =>
+            {
+                var obj = JsonConvert.DeserializeObject<FineFundamental>(json);
+            });
+        }
+
         // This test reports higher memory usage when ran with Travis, so we exclude it for now
         [Test, Category("TravisExclude")]
         public void DoesNotLeakMemory()
@@ -83,7 +101,13 @@ namespace QuantConnect.Tests.Engine.DataFeeds.Enumerators.Factories
             var endDate = new DateTime(2014, 4, 30);
 
             var config = new SubscriptionDataConfig(typeof(FineFundamental), symbol, Resolution.Daily, TimeZones.NewYork, TimeZones.NewYork, false, false, false, false, TickType.Trade, false);
-            var security = new Security(SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork), config, new Cash(CashBook.AccountCurrency, 0, 1), SymbolProperties.GetDefault(CashBook.AccountCurrency));
+            var security = new Security(
+                SecurityExchangeHours.AlwaysOpen(TimeZones.NewYork),
+                config,
+                new Cash(Currencies.USD, 0, 1),
+                SymbolProperties.GetDefault(Currencies.USD),
+                ErrorCurrencyConverter.Instance
+            );
             var request = new SubscriptionRequest(false, null, security, config, startDate, endDate);
             var fileProvider = new DefaultDataProvider();
             var factory = new FineFundamentalSubscriptionEnumeratorFactory(false);

@@ -14,6 +14,7 @@
 */
 
 using System;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
@@ -23,6 +24,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 using NodaTime;
 using Python.Runtime;
@@ -233,10 +235,29 @@ namespace QuantConnect
             return (decimal) input;
         }
 
+        /// <summary>
+        /// Will remove any trailing zeros for the provided decimal input
+        /// </summary>
+        /// <param name="input">The <see cref="decimal"/> to remove trailing zeros from</param>
+        /// <returns>Provided input with no trailing zeros</returns>
+        /// <remarks>Will not have the expected behavior when called from Python,
+        /// since the returned <see cref="decimal"/> will be converted to python float,
+        /// <see cref="NormalizeToStr"/></remarks>
         public static decimal Normalize(this decimal input)
         {
             // http://stackoverflow.com/a/7983330/1582922
             return input / 1.000000000000000000000000000000000m;
+        }
+
+        /// <summary>
+        /// Will remove any trailing zeros for the provided decimal and convert to string.
+        /// Uses <see cref="Normalize"/>.
+        /// </summary>
+        /// <param name="input">The <see cref="decimal"/> to convert to <see cref="string"/></param>
+        /// <returns>Input converted to <see cref="string"/> with no trailing zeros</returns>
+        public static string NormalizeToStr(this decimal input)
+        {
+            return Normalize(input).ToString(CultureInfo.InvariantCulture);
         }
 
         /// <summary>
@@ -301,6 +322,9 @@ namespace QuantConnect
             int value = 0;
             for (var i = 0; i < str.Length; i++)
             {
+                if (str[i] == '.')
+                    break;
+
                 value = value * 10 + (str[i] - '0');
             }
             return value;
@@ -317,6 +341,9 @@ namespace QuantConnect
             long value = 0;
             for (var i = 0; i < str.Length; i++)
             {
+                if (str[i] == '.')
+                    break;
+
                 value = value * 10 + (str[i] - '0');
             }
             return value;
@@ -486,7 +513,7 @@ namespace QuantConnect
         }
 
         /// <summary>
-        /// Rounds the specified date time in the specified time zone
+        /// Rounds the specified date time in the specified time zone. Careful with calling this method in a loop while modifying dateTime, check unit tests.
         /// </summary>
         /// <param name="dateTime">Date time to be rounded</param>
         /// <param name="roundingInterval">Timespan rounding period</param>
@@ -541,10 +568,20 @@ namespace QuantConnect
             // can't round against a zero interval
             if (interval == TimeSpan.Zero) return dateTime;
 
-            var rounded = dateTime.RoundDownInTimeZone(interval, exchangeHours.TimeZone, roundingTimeZone);
+            var dateTimeInRoundingTimeZone = dateTime.ConvertTo(exchangeHours.TimeZone, roundingTimeZone);
+            var roundedDateTimeInRoundingTimeZone = dateTimeInRoundingTimeZone.RoundDown(interval);
+            var rounded = roundedDateTimeInRoundingTimeZone.ConvertTo(roundingTimeZone, exchangeHours.TimeZone);
+
             while (!exchangeHours.IsOpen(rounded, rounded + interval, extendedMarket))
             {
-                rounded = (rounded - interval).RoundDownInTimeZone(interval, exchangeHours.TimeZone, roundingTimeZone);
+                // Will subtract interval to 'dateTime' in the roundingTimeZone (using the same value type instance) to avoid issues with daylight saving time changes.
+                // GH issue 2368: subtracting interval to 'dateTime' in exchangeHours.TimeZone and converting back to roundingTimeZone
+                // caused the substraction to be neutralized by daylight saving time change, which caused an infinite loop situation in this loop.
+                // The issue also happens if substracting in roundingTimeZone and converting back to exchangeHours.TimeZone.
+
+                dateTimeInRoundingTimeZone -= interval;
+                roundedDateTimeInRoundingTimeZone = dateTimeInRoundingTimeZone.RoundDown(interval);
+                rounded = roundedDateTimeInRoundingTimeZone.ConvertTo(roundingTimeZone, exchangeHours.TimeZone);
             }
             return rounded;
         }
@@ -586,8 +623,6 @@ namespace QuantConnect
         /// <returns>The time in terms of the to time zone</returns>
         public static DateTime ConvertTo(this DateTime time, DateTimeZone from, DateTimeZone to, bool strict = false)
         {
-            if (ReferenceEquals(from, to)) return time;
-
             if (strict)
             {
                 return from.AtStrictly(LocalDateTime.FromDateTime(time)).WithZone(to).ToDateTimeUnspecified();
@@ -890,6 +925,26 @@ namespace QuantConnect
         }
 
         /// <summary>
+        /// Get the first occurence of a string between two characters from another string
+        /// </summary>
+        /// <param name="value">The original string</param>
+        /// <param name="left">Left bound of the substring</param>
+        /// <param name="right">Right bound of the substring</param>
+        /// <returns>Substring from original string bounded by the two characters</returns>
+        public static string GetStringBetweenChars(this string value, char left, char right)
+        {
+            var startIndex = 1 + value.IndexOf(left);
+            var length = value.IndexOf(right, startIndex) - startIndex;
+            if (length > 0)
+            {
+                value = value.Substring(startIndex, length);
+                startIndex = 1 + value.IndexOf(left);
+                return value.Substring(startIndex).Trim();
+            }
+            return string.Empty;
+        }
+
+        /// <summary>
         /// Return the first in the series of names, or find the one that matches the configured algirithmTypeName
         /// </summary>
         /// <param name="names">The list of class names</param>
@@ -899,7 +954,7 @@ namespace QuantConnect
         {
             // if there's only one use that guy
             // if there's more than one then find which one we should use using the algorithmTypeName specified
-            return names.Count == 1 ? names.Single() : names.SingleOrDefault(x => x.Contains("." + algorithmTypeName));
+            return names.Count == 1 ? names.Single() : names.SingleOrDefault(x => x.EndsWith("." + algorithmTypeName));
         }
 
         /// <summary>
@@ -960,8 +1015,9 @@ namespace QuantConnect
                 order.Properties);
 
             submitOrderRequest.SetOrderId(order.Id);
-
-            return new OrderTicket(transactionManager, submitOrderRequest);
+            var orderTicket = new OrderTicket(transactionManager, submitOrderRequest);
+            orderTicket.SetOrder(order);
+            return orderTicket;
         }
 
         public static void ProcessUntilEmpty<T>(this IProducerConsumerCollection<T> collection, Action<T> handler)
@@ -1005,6 +1061,248 @@ namespace QuantConnect
                 }
                 return value;
             }
+        }
+
+        /// <summary>
+        /// Tries to convert a <see cref="PyObject"/> into a managed object
+        /// </summary>
+        /// <typeparam name="T">Target type of the resulting managed object</typeparam>
+        /// <param name="pyObject">PyObject to be converted</param>
+        /// <param name="result">Managed object </param>
+        /// <returns>True if successful conversion</returns>
+        public static bool TryConvert<T>(this PyObject pyObject, out T result)
+        {
+            result = default(T);
+            var type = typeof(T);
+
+            if (pyObject == null)
+            {
+                return true;
+            }
+
+            using (Py.GIL())
+            {
+                try
+                {
+                    // Special case: Type
+                    if (typeof(Type).IsAssignableFrom(type))
+                    {
+                        result = (T)pyObject.AsManagedObject(type);
+                        return true;
+                    }
+
+                    // Special case: IEnumerable
+                    if (typeof(IEnumerable).IsAssignableFrom(type))
+                    {
+                        result = (T)pyObject.AsManagedObject(type);
+                        return true;
+                    }
+
+                    var pythonType = pyObject.GetPythonType();
+                    var csharpType = pythonType.As<Type>();
+
+                    if (!type.IsAssignableFrom(csharpType))
+                    {
+                        return false;
+                    }
+
+                    result = (T)pyObject.AsManagedObject(type);
+
+                    // If the PyObject type and the managed object names are the same,
+                    // pyObject is a C# object wrapped in PyObject, in this case return true
+                    // Otherwise, pyObject is a python object that subclass a C# class.
+                    string name = ((dynamic) pythonType).__name__;
+                    return name == result.GetType().Name;
+                }
+                catch
+                {
+                    // Do not throw or log the exception.
+                    // Return false as an exception means that the conversion could not be made.
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Tries to convert a <see cref="PyObject"/> into a managed object
+        /// </summary>
+        /// <typeparam name="T">Target type of the resulting managed object</typeparam>
+        /// <param name="pyObject">PyObject to be converted</param>
+        /// <param name="result">Managed object </param>
+        /// <returns>True if successful conversion</returns>
+        public static bool TryConvertToDelegate<T>(this PyObject pyObject, out T result)
+        {
+            var type = typeof(T);
+
+            if (!typeof(MulticastDelegate).IsAssignableFrom(type))
+            {
+                throw new ArgumentException($"TryConvertToDelegate cannot be used to convert a PyObject into {type}.");
+            }
+
+            result = default(T);
+
+            if (pyObject == null)
+            {
+                return true;
+            }
+
+            var code = string.Empty;
+            var locals = new PyDict();
+            var types = type.GetGenericArguments();
+
+            try
+            {
+                using (Py.GIL())
+                {
+                    for (var i = 0; i < types.Length; i++)
+                    {
+                        code += $",t{i}";
+                        locals.SetItem($"t{i}", types[i].ToPython());
+                    }
+
+                    locals.SetItem("pyObject", pyObject);
+
+                    var name = type.FullName.Substring(0, type.FullName.IndexOf('`'));
+                    code = $"import System; delegate = {name}[{code.Substring(1)}](pyObject)";
+
+                    PythonEngine.Exec(code, null, locals.Handle);
+                    result = (T)locals.GetItem("delegate").AsManagedObject(typeof(T));
+
+                    return true;
+                }
+            }
+            catch
+            {
+                // Do not throw or log the exception.
+                // Return false as an exception means that the conversion could not be made.
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Convert a <see cref="PyObject"/> into a managed object
+        /// </summary>
+        /// <typeparam name="T">Target type of the resulting managed object</typeparam>
+        /// <param name="pyObject">PyObject to be converted</param>
+        /// <returns>Instance of type T</returns>
+        public static T ConvertToDelegate<T>(this PyObject pyObject)
+        {
+            T result;
+            if (pyObject.TryConvertToDelegate(out result))
+            {
+                return result;
+            }
+            else
+            {
+                throw new ArgumentException($"ConvertToDelegate cannot be used to convert a PyObject into {typeof(T)}.");
+            }
+        }
+
+        /// <summary>
+        /// Converts the numeric value of one or more enumerated constants to an equivalent enumerated string.
+        /// </summary>
+        /// <param name="value">Numeric value</param>
+        /// <param name="pyObject">Python object that encapsulated a Enum Type</param>
+        /// <returns>String that represents the enumerated object</returns>
+        public static string GetEnumString(this int value, PyObject pyObject)
+        {
+            Type type;
+            if (pyObject.TryConvert(out type))
+            {
+                return value.ToString().ConvertTo(type).ToString();
+            }
+            else
+            {
+                using (Py.GIL())
+                {
+                    throw new ArgumentException($"GetEnumString(): {pyObject.Repr()} is not a C# Type.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Destroys a PyObject
+        /// https://docs.python.org/2/reference/datamodel.html#object.__del__
+        /// </summary>
+        /// <param name="pyObject">PyObject to be destroyed</param>
+        public static void Destroy(this PyObject pyObject)
+        {
+            try
+            {
+                if (pyObject.HasAttr("__del__"))
+                {
+                    pyObject.InvokeMethod("__del__");
+                }
+            }
+            catch (PythonException e)
+            {
+                if (string.IsNullOrWhiteSpace(e.StackTrace))
+                {
+                    throw new Exception($"{(pyObject as dynamic).__qualname__} returned a result with an undefined error set.");
+                }
+                else
+                {
+                    throw e;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Performs on-line batching of the specified enumerator, emitting chunks of the requested batch size
+        /// </summary>
+        /// <typeparam name="T">The enumerable item type</typeparam>
+        /// <param name="enumerable">The enumerable to be batched</param>
+        /// <param name="batchSize">The number of items per batch</param>
+        /// <returns>An enumerable of lists</returns>
+        public static IEnumerable<List<T>> BatchBy<T>(this IEnumerable<T> enumerable, int batchSize)
+        {
+            using (var enumerator = enumerable.GetEnumerator())
+            {
+                List<T> list = null;
+                while (enumerator.MoveNext())
+                {
+                    if (list == null)
+                    {
+                        list = new List<T> {enumerator.Current};
+                    }
+                    else if (list.Count < batchSize)
+                    {
+                        list.Add(enumerator.Current);
+                    }
+                    else
+                    {
+                        yield return list;
+                        list = new List<T> {enumerator.Current};
+                    }
+                }
+
+                if (list?.Count > 0)
+                {
+                    yield return list;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Safely blocks until the specified task has completed executing
+        /// </summary>
+        /// <typeparam name="TResult">The task's result type</typeparam>
+        /// <param name="task">The task to be awaited</param>
+        /// <returns>The result of the task</returns>
+        public static TResult SynchronouslyAwaitTaskResult<TResult>(this Task<TResult> task)
+        {
+            return task.ConfigureAwait(false).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Safely blocks until the specified task has completed executing
+        /// </summary>
+        /// <param name="task">The task to be awaited</param>
+        /// <returns>The result of the task</returns>
+        public static void SynchronouslyAwaitTask(this Task task)
+        {
+            task.ConfigureAwait(false).GetAwaiter().GetResult();
         }
     }
 }

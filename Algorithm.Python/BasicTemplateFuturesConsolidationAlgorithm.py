@@ -14,7 +14,6 @@
 from clr import AddReference
 AddReference("System")
 AddReference("QuantConnect.Algorithm")
-AddReference("QuantConnect.Indicators")
 AddReference("QuantConnect.Common")
 
 from System import *
@@ -22,7 +21,8 @@ from QuantConnect import *
 from QuantConnect.Data import *
 from QuantConnect.Algorithm import *
 from QuantConnect.Indicators import *
-
+from QuantConnect.Securities import *
+from QuantConnect.Data.Consolidators import *
 from datetime import timedelta
 
 ### <summary>
@@ -35,7 +35,7 @@ from datetime import timedelta
 class BasicTemplateFuturesConsolidationAlgorithm(QCAlgorithm):
 
     def Initialize(self):
-        self.SetStartDate(2013, 10, 07)
+        self.SetStartDate(2013, 10, 7)
         self.SetEndDate(2013, 10, 11)
         self.SetCash(1000000)
 
@@ -43,20 +43,23 @@ class BasicTemplateFuturesConsolidationAlgorithm(QCAlgorithm):
         future = self.AddFuture(Futures.Indices.SP500EMini)
         future.SetFilter(timedelta(0), timedelta(182))
 
-        self._futureContracts = []
+        self.consolidators = dict()
 
     def OnData(self,slice):
-        for chain in slice.FutureChains:
-            for contract in chain.Value:
-                if contract.Symbol not in self._futureContracts:
-                    self._futureContracts.append(contract.Symbol)
-
-                    consolidator = QuoteBarConsolidator(timedelta(minutes=5))
-                    consolidator.DataConsolidated += self.OnDataConsolidated
-                    self.SubscriptionManager.AddConsolidator(contract.Symbol, consolidator)
-
-                    self.Log("Added new consolidator for " + str(contract.Symbol.Value))
+        pass
 
     def OnDataConsolidated(self, sender, quoteBar):
         self.Log("OnDataConsolidated called on " + str(self.Time))
         self.Log(str(quoteBar))
+        
+    def OnSecuritiesChanged(self, changes):
+        for security in changes.AddedSecurities:
+            consolidator = QuoteBarConsolidator(timedelta(minutes=5))
+            consolidator.DataConsolidated += self.OnDataConsolidated
+            self.SubscriptionManager.AddConsolidator(security.Symbol, consolidator)
+            self.consolidators[security.Symbol] = consolidator
+            
+        for security in changes.RemovedSecurities:
+            consolidator = self.consolidators.pop(security.Symbol)
+            self.SubscriptionManager.RemoveConsolidator(security.Symbol, consolidator)
+            consolidator.DataConsolidated -= self.OnDataConsolidated

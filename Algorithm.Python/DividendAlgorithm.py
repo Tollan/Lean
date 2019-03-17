@@ -35,8 +35,8 @@ class DividendAlgorithm(QCAlgorithm):
 
     def Initialize(self):
         '''Initialise the data and resolution required, as well as the cash and start-end dates for your algorithm. All algorithms must initialized.'''
-        self.SetStartDate(1998,01,01)  #Set Start Date
-        self.SetEndDate(2006,01,21)    #Set End Date
+        self.SetStartDate(1998,1,1)  #Set Start Date
+        self.SetEndDate(2006,1,21)    #Set End Date
         self.SetCash(100000)           #Set Strategy Cash
         # Find more symbols here: http://quantconnect.com/data
         equity = self.AddEquity("MSFT", Resolution.Daily)
@@ -55,22 +55,19 @@ class DividendAlgorithm(QCAlgorithm):
             self.SetHoldings("MSFT", .5)
             # place some orders that won't fill, when the split comes in they'll get modified to reflect the split
             quantity = self.CalculateOrderQuantity("MSFT", .25)
-            self.Debug("Purchased Stock: {0}".format(bar.Price))
+            self.Debug(f"Purchased Stock: {bar.Price}")
             self.StopMarketOrder("MSFT", -quantity, bar.Low/2)
             self.LimitOrder("MSFT", -quantity, bar.High*2)
 
-        for kvp in data.Dividends:   # update this to Dividends dictionary
-            symbol = kvp.Key
-            value = kvp.Value.Distribution
-            self.Log("{0} >> DIVIDEND >> {1} - {2} - {3} - {4}".format(self.Time, symbol, value, self.Portfolio.Cash, self.Portfolio["MSFT"].Price))
+        if data.Dividends.ContainsKey("MSFT"):
+            dividend = data.Dividends["MSFT"]
+            self.Log(f"{self.Time} >> DIVIDEND >> {dividend.Symbol} - {dividend.Distribution} - {self.Portfolio.Cash} - {self.Portfolio['MSFT'].Price}")
 
-        for kvp in data.Splits:      # update this to Splits dictionary
-            symbol = kvp.Key
-            value = kvp.Value.SplitFactor
-            self.Log("{0} >> SPLIT >> {1} - {2} - {3} - {4}".format(self.Time, symbol, value, self.Portfolio.Cash, self.Portfolio["MSFT"].Quantity))
-
+        if data.Splits.ContainsKey("MSFT"):
+            split = data.Splits["MSFT"]
+            self.Log(f"{self.Time} >> SPLIT >> {split.Symbol} - {split.SplitFactor} - {self.Portfolio.Cash} - {self.Portfolio['MSFT'].Price}")
 
     def OnOrderEvent(self, orderEvent):
         # orders get adjusted based on split events to maintain order value
         order = self.Transactions.GetOrderById(orderEvent.OrderId)
-        self.Log("{0} >> ORDER >> {1}".format(self.Time, order))
+        self.Log(f"{self.Time} >> ORDER >> {order}")

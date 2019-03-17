@@ -14,6 +14,7 @@
 from clr import AddReference
 AddReference("System")
 AddReference("QuantConnect.Algorithm")
+AddReference("QuantConnect.Algorithm.Framework")
 AddReference("QuantConnect.Common")
 
 from System import *
@@ -21,11 +22,12 @@ from QuantConnect import *
 from QuantConnect.Orders import *
 from QuantConnect.Algorithm import *
 from QuantConnect.Algorithm.Framework import *
+from QuantConnect.Algorithm.Framework.Alphas import *
 from QuantConnect.Algorithm.Framework.Execution import *
 from QuantConnect.Algorithm.Framework.Portfolio import *
 from QuantConnect.Algorithm.Framework.Risk import *
 from QuantConnect.Algorithm.Framework.Selection import *
-from QuantConnect.Algorithm.Framework.Alphas import *
+from datetime import timedelta
 import numpy as np
 
 ### <summary>
@@ -43,7 +45,7 @@ class BasicTemplateFrameworkAlgorithm(QCAlgorithmFramework):
         # Set requested data resolution
         self.UniverseSettings.Resolution = Resolution.Minute
 
-        self.SetStartDate(2013,10,07)  #Set Start Date
+        self.SetStartDate(2013,10,7)   #Set Start Date
         self.SetEndDate(2013,10,11)    #Set End Date
         self.SetCash(100000)           #Set Strategy Cash
 
@@ -54,14 +56,12 @@ class BasicTemplateFrameworkAlgorithm(QCAlgorithmFramework):
         symbols = [ Symbol.Create("SPY", SecurityType.Equity, Market.USA) ]
 
         # set algorithm framework models
-        self.PortfolioSelection = ManualPortfolioSelectionModel(symbols)
-        self.Alpha = ConstantAlphaModel(AlphaType.Price, AlphaDirection.Up, TimeSpan.FromMinutes(20), 0.025, None)
-        self.PortfolioConstruction = SimplePortfolioConstructionModel()
+        self.SetUniverseSelection(ManualUniverseSelectionModel(symbols))
+        self.SetAlpha(ConstantAlphaModel(InsightType.Price, InsightDirection.Up, timedelta(minutes = 20), 0.025, None))
+        self.SetPortfolioConstruction(EqualWeightingPortfolioConstructionModel())
+        self.SetExecution(ImmediateExecutionModel())
+        self.SetRiskManagement(MaximumDrawdownPercentPerSecurity(0.01))
 
-        # these are the default values for Execution and RiskManagement models
-        #self.Execution = ImmediateExecutionModel()
-        #self.RiskManagement = NullRiskManagementModel()
-        
         self.Debug("numpy test >>> print numpy.pi: " + str(np.pi))
 
     def OnOrderEvent(self, orderEvent):
