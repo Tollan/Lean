@@ -243,6 +243,7 @@
     <Compile Include="UniverseSharingSubscriptionRequestRegressionAlgorithm.cs" />
     <Compile Include="UserDefinedUniverseAlgorithm.cs" />
     <Compile Include="VolumeWeightedAveragePriceExecutionModelRegressionAlgorithm.cs" />
+    <Compile Include="VXXSurfer.cs" />
     <Compile Include="WarmupAlgorithm.cs" />
     <Compile Include="WarmupConversionRatesRegressionAlgorithm.cs" />
     <Compile Include="WarmupHistoryAlgorithm.cs" />
