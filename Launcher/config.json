@@ -31,7 +31,7 @@
 
   // engine
   //"data-folder": "../../../Data/",
-  "data-folder": "C:/Users/tolla/OneDrive/QC Data/data",
+  "data-folder": "C:/Users/tolla/OneDrive/QC Data/data/",
 
   // handlers
   "log-handler": "QuantConnect.Logging.CompositeLogHandler",
