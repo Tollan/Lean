@@ -41,6 +41,7 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators.Factories
         /// <param name="tradableDayNotifier">Tradable dates provider</param>
         /// <param name="mapFileResolver">Used for resolving the correct map files</param>
         /// <param name="includeAuxiliaryData">True to emit auxiliary data</param>
+        /// <param name="startTime">Start date for the data request</param>
         /// <returns>The new auxiliary data enumerator</returns>
         public static IEnumerator<BaseData> CreateEnumerators(
             IEnumerator<BaseData> rawDataEnumerator,
@@ -48,15 +49,16 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators.Factories
             IFactorFileProvider factorFileProvider,
             ITradableDatesNotifier tradableDayNotifier,
             MapFileResolver mapFileResolver,
-            bool includeAuxiliaryData)
+            bool includeAuxiliaryData,
+            DateTime startTime)
         {
-            var mapFileToUse = GetMapFileToUse(config, mapFileResolver);
-            var factorFile = GetFactorFileToUse(config, factorFileProvider);
+            var lazyFactorFile =
+                new Lazy<FactorFile>(() => GetFactorFileToUse(config, factorFileProvider));
 
             var enumerator = new AuxiliaryDataEnumerator(
                 config,
-                factorFile,
-                mapFileToUse,
+                lazyFactorFile,
+                new Lazy<MapFile>(() => GetMapFileToUse(config, mapFileResolver)),
                 new ITradableDateEventProvider[]
                 {
                     new MappingEventProvider(),
@@ -65,12 +67,13 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators.Factories
                     new DelistingEventProvider()
                 },
                 tradableDayNotifier,
-                includeAuxiliaryData);
+                includeAuxiliaryData,
+                startTime);
 
             var priceScaleFactorEnumerator = new PriceScaleFactorEnumerator(
                 rawDataEnumerator,
                 config,
-                factorFile);
+                lazyFactorFile);
 
             return new SynchronizingEnumerator(priceScaleFactorEnumerator, enumerator);
         }
@@ -81,36 +84,18 @@ namespace QuantConnect.Lean.Engine.DataFeeds.Enumerators.Factories
         {
             var mapFileToUse = new MapFile(config.Symbol.Value, new List<MapFileRow>());
 
-            // load up the map and factor files for equities
-            if (!config.IsCustomData && config.SecurityType == SecurityType.Equity)
+            // load up the map and factor files for equities, options, and custom data
+            if (config.TickerShouldBeMapped())
             {
                 try
                 {
-                    var mapFile = mapFileResolver.ResolveMapFile(
-                        config.Symbol.ID.Symbol,
-                        config.Symbol.ID.Date);
+                    var mapFile = mapFileResolver.ResolveMapFile(config.Symbol, config.Type);
 
                     // only take the resolved map file if it has data, otherwise we'll use the empty one we defined above
-                    if (mapFile.Any()) mapFileToUse = mapFile;
-                }
-                catch (Exception err)
-                {
-                    Log.Error(err, "CorporateEventEnumeratorFactory.GetMapFileToUse():" +
-                        " Map File: " + config.Symbol.ID + ": ");
-                }
-            }
-
-            // load up the map and factor files for underlying of equity option
-            if (!config.IsCustomData && config.SecurityType == SecurityType.Option)
-            {
-                try
-                {
-                    var mapFile = mapFileResolver.ResolveMapFile(
-                        config.Symbol.Underlying.ID.Symbol,
-                        config.Symbol.Underlying.ID.Date);
-
-                    // only take the resolved map file if it has data, otherwise we'll use the empty one we defined above
-                    if (mapFile.Any()) mapFileToUse = mapFile;
+                    if (mapFile.Any())
+                    {
+                        mapFileToUse = mapFile;
+                    }
                 }
                 catch (Exception err)
                 {

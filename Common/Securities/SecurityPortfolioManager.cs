@@ -16,7 +16,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using Python.Runtime;
 using QuantConnect.Data.Market;
@@ -24,6 +23,7 @@ using QuantConnect.Interfaces;
 using QuantConnect.Logging;
 using QuantConnect.Orders;
 using QuantConnect.Python;
+using static QuantConnect.StringExtensions;
 
 namespace QuantConnect.Securities
 {
@@ -34,7 +34,10 @@ namespace QuantConnect.Securities
     public class SecurityPortfolioManager : IDictionary<Symbol, SecurityHolding>, ISecurityProvider
     {
         // flips to true when the user called SetCash(), if true, SetAccountCurrency will throw
+        private bool _setAccountCurrencyWasCalled;
         private bool _setCashWasCalled;
+        private bool _isTotalPortfolioValueValid;
+        private decimal _totalPortfolioValue;
 
         /// <summary>
         /// Local access to the securities collection for the portfolio summation.
@@ -49,12 +52,12 @@ namespace QuantConnect.Securities
         /// <summary>
         /// Gets the cash book that keeps track of all currency holdings (only settled cash)
         /// </summary>
-        public CashBook CashBook { get; private set; }
+        public CashBook CashBook { get; }
 
         /// <summary>
         /// Gets the cash book that keeps track of all currency holdings (only unsettled cash)
         /// </summary>
-        public CashBook UnsettledCashBook { get; private set; }
+        public CashBook UnsettledCashBook { get; }
 
         /// <summary>
         /// The list of pending funds waiting for settlement time
@@ -86,6 +89,9 @@ namespace QuantConnect.Securities
 
             // default to $100,000.00
             _baseCurrencyCash.SetAmount(100000);
+
+            CashBook.Updated += (sender, args) => InvalidateTotalPortfolioValue();
+            UnsettledCashBook.Updated += (sender, args) => InvalidateTotalPortfolioValue();
         }
 
         #region IDictionary Implementation
@@ -301,7 +307,7 @@ namespace QuantConnect.Securities
         /// </summary>
         public decimal TotalAbsoluteHoldingsCost
         {
-            get { return Securities.Sum(x => x.Value.Holdings.AbsoluteHoldingsCost); }
+            get { return Securities.Aggregate(0m, (d, pair) => d + pair.Value.Holdings.AbsoluteHoldingsCost); }
         }
 
         /// <summary>
@@ -368,28 +374,47 @@ namespace QuantConnect.Securities
         {
             get
             {
-                // we can't include forex in this calculation since we would be double accounting with respect to the cash book
-                // we also exclude futures and CFD as they are calculated separately
-                decimal totalHoldingsValueWithoutForexCryptoFutureCfd = 0;
-                foreach (var kvp in Securities)
+                if (!_isTotalPortfolioValueValid)
                 {
-                    var position = kvp.Value;
-                    if (position.Type != SecurityType.Forex && position.Type != SecurityType.Crypto &&
-                        position.Type != SecurityType.Future && position.Type != SecurityType.Cfd)
+                    decimal totalHoldingsValueWithoutForexCryptoFutureCfd = 0;
+                    decimal totalFuturesAndCfdHoldingsValue = 0;
+                    foreach (var kvp in Securities)
                     {
-                        totalHoldingsValueWithoutForexCryptoFutureCfd += position.Holdings.HoldingsValue;
+                        var position = kvp.Value;
+                        var securityType = position.Type;
+                        // we can't include forex in this calculation since we would be double accounting with respect to the cash book
+                        // we also exclude futures and CFD as they are calculated separately
+                        if (securityType != SecurityType.Forex && securityType != SecurityType.Crypto &&
+                            securityType != SecurityType.Future && securityType != SecurityType.Cfd)
+                        {
+                            totalHoldingsValueWithoutForexCryptoFutureCfd += position.Holdings.HoldingsValue;
+                        }
+
+                        if (securityType == SecurityType.Future || securityType == SecurityType.Cfd)
+                        {
+                            totalFuturesAndCfdHoldingsValue += position.Holdings.UnrealizedProfit;
+                        }
                     }
-                }
 
-                var totalFuturesAndCfdHoldingsValue = Securities
-                    .Where(x => x.Value.Type == SecurityType.Future || x.Value.Type == SecurityType.Cfd)
-                    .Sum(x => x.Value.Holdings.UnrealizedProfit);
-
-                return CashBook.TotalValueInAccountCurrency +
+                    _totalPortfolioValue = CashBook.TotalValueInAccountCurrency +
                        UnsettledCashBook.TotalValueInAccountCurrency +
                        totalHoldingsValueWithoutForexCryptoFutureCfd +
                        totalFuturesAndCfdHoldingsValue;
+
+                    _isTotalPortfolioValueValid = true;
+                }
+
+                return _totalPortfolioValue;
             }
+        }
+
+        /// <summary>
+        /// Will flag the current <see cref="TotalPortfolioValue"/> as invalid
+        /// so it is recalculated when gotten
+        /// </summary>
+        public void InvalidateTotalPortfolioValue()
+        {
+            _isTotalPortfolioValueValid = false;
         }
 
         /// <summary>
@@ -439,9 +464,13 @@ namespace QuantConnect.Securities
                 foreach (var kvp in Securities)
                 {
                     var security = kvp.Value;
+                    if (security.Holdings.Quantity == 0)
+                    {
+                        continue;
+                    }
                     var context = new ReservedBuyingPowerForPositionParameters(security);
                     var reservedBuyingPower = security.BuyingPowerModel.GetReservedBuyingPowerForPosition(context);
-                    sum += reservedBuyingPower.Value;
+                    sum += reservedBuyingPower.AbsoluteUsedBuyingPower;
                 }
                 return sum;
             }
@@ -450,9 +479,20 @@ namespace QuantConnect.Securities
         /// <summary>
         /// Gets the remaining margin on the account in the account's currency
         /// </summary>
-        public decimal MarginRemaining
+        /// <see cref="GetMarginRemaining(decimal)"/>
+        public decimal MarginRemaining => GetMarginRemaining(TotalPortfolioValue);
+
+        /// <summary>
+        /// Gets the remaining margin on the account in the account's currency
+        /// for the given total portfolio value
+        /// </summary>
+        /// <remarks>This method is for performance, for when the user already knows
+        /// the total portfolio value, we can avoid re calculating it. Else use
+        /// <see cref="MarginRemaining"/></remarks>
+        /// <param name="totalPortfolioValue">The total portfolio value <see cref="TotalPortfolioValue"/></param>
+        public decimal GetMarginRemaining(decimal totalPortfolioValue)
         {
-            get { return TotalPortfolioValue - UnsettledCashBook.TotalValueInAccountCurrency - TotalMarginUsed; }
+            return totalPortfolioValue - UnsettledCashBook.TotalValueInAccountCurrency - TotalMarginUsed;
         }
 
         /// <summary>
@@ -491,6 +531,22 @@ namespace QuantConnect.Securities
         /// <param name="accountCurrency">The account currency cash symbol to set</param>
         public void SetAccountCurrency(string accountCurrency)
         {
+            accountCurrency = accountCurrency.LazyToUpper();
+
+            // only allow setting account currency once
+            // we could try to set it twice when backtesting and the job packet specifies the initial CashAmount to use
+            if (_setAccountCurrencyWasCalled)
+            {
+                if (accountCurrency != CashBook.AccountCurrency)
+                {
+                    Log.Trace("SecurityPortfolioManager.SetAccountCurrency():" +
+                              $" account currency has already been set to {CashBook.AccountCurrency}." +
+                              $" Will ignore new value {accountCurrency}");
+                }
+                return;
+            }
+            _setAccountCurrencyWasCalled = true;
+
             if (Securities.Count > 0)
             {
                 throw new InvalidOperationException("SecurityPortfolioManager.SetAccountCurrency(): " +
@@ -504,7 +560,6 @@ namespace QuantConnect.Securities
                     "Cannot change AccountCurrency after setting cash. " +
                     "Please move SetAccountCurrency() before SetCash().");
             }
-            accountCurrency = accountCurrency.ToUpper();
 
             Log.Trace("SecurityPortfolioManager.SetAccountCurrency():" +
                 $" setting account currency to {accountCurrency}");
@@ -548,31 +603,6 @@ namespace QuantConnect.Securities
         }
 
         /// <summary>
-        /// Gets the margin available for trading a specific symbol in a specific direction.
-        /// </summary>
-        /// <param name="symbol">The symbol to compute margin remaining for</param>
-        /// <param name="direction">The order/trading direction</param>
-        /// <returns>The maximum order size that is currently executable in the specified direction</returns>
-        public decimal GetMarginRemaining(Symbol symbol, OrderDirection direction = OrderDirection.Buy)
-        {
-            var security = Securities[symbol];
-            var context = new BuyingPowerParameters(this, security, direction);
-            return security.BuyingPowerModel.GetBuyingPower(context).Value;
-        }
-
-        /// <summary>
-        /// Gets the margin available for trading a specific symbol in a specific direction.
-        /// Alias for <see cref="GetMarginRemaining"/>
-        /// </summary>
-        /// <param name="symbol">The symbol to compute margin remaining for</param>
-        /// <param name="direction">The order/trading direction</param>
-        /// <returns>The maximum order size that is currently executable in the specified direction</returns>
-        public decimal GetBuyingPower(Symbol symbol, OrderDirection direction = OrderDirection.Buy)
-        {
-            return GetMarginRemaining(symbol, direction);
-        }
-
-        /// <summary>
         /// Calculate the new average price after processing a partial/complete order fill event.
         /// </summary>
         /// <remarks>
@@ -584,6 +614,7 @@ namespace QuantConnect.Securities
         {
             var security = Securities[fill.Symbol];
             security.PortfolioModel.ProcessFill(this, security, fill);
+            InvalidateTotalPortfolioValue();
         }
 
         /// <summary>
@@ -677,6 +708,8 @@ namespace QuantConnect.Securities
             }
 
             security.SetMarketPrice(next);
+            // security price updated
+            InvalidateTotalPortfolioValue();
         }
 
         /// <summary>
@@ -749,8 +782,9 @@ namespace QuantConnect.Securities
         public void LogMarginInformation(OrderRequest orderRequest = null)
         {
             Log.Trace("Total margin information: " +
-                      $"TotalMarginUsed: {TotalMarginUsed.ToString("F2", CultureInfo.InvariantCulture)}, " +
-                      $"MarginRemaining: {MarginRemaining.ToString("F2", CultureInfo.InvariantCulture)}");
+                  Invariant($"TotalMarginUsed: {TotalMarginUsed:F2}, ") +
+                  Invariant($"MarginRemaining: {MarginRemaining:F2}")
+              );
 
             var orderSubmitRequest = orderRequest as SubmitOrderRequest;
             if (orderSubmitRequest != null)
@@ -762,13 +796,9 @@ namespace QuantConnect.Securities
                     new ReservedBuyingPowerForPositionParameters(security)
                 );
 
-                var marginRemaining = security.BuyingPowerModel.GetBuyingPower(
-                    new BuyingPowerParameters(this, security, direction)
-                );
-
                 Log.Trace("Order request margin information: " +
-                          $"MarginUsed: {marginUsed.Value.ToString("F2", CultureInfo.InvariantCulture)}, " +
-                          $"MarginRemaining: {marginRemaining.Value.ToString("F2", CultureInfo.InvariantCulture)}");
+                    Invariant($"MarginUsed: {marginUsed.AbsoluteUsedBuyingPower:F2}")
+                );
             }
         }
 
